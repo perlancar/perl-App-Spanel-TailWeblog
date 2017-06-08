@@ -9,7 +9,7 @@ use warnings;
 
 use Getopt::Long qw(:config no_ignore_case bundling no_ignore_case gnu_compat no_getopt_compat);
 use IO::Tail;
-#use Timer::HiRes;
+use Time::HiRes 'sleep';
 
 my $PROG = "spanel-tail-weblog";
 
@@ -60,7 +60,7 @@ sub run {
     my @buffer;
     while (1) {
         my $now = time();
-        if (!$last_check_time || $last_check_time < $now - 5) {
+        if (!$last_check_time || $last_check_time < $now - 2) {
 
             my @names;
 
@@ -101,7 +101,8 @@ sub run {
         for (@buffer) {
             print;
         }
-        sleep 1;
+        @buffer = ();
+        sleep 0.1;
     }
 }
 
