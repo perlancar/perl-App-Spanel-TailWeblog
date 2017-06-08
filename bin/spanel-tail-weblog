@@ -1,0 +1,119 @@
+#!perl
+
+# DATE
+# VERSION
+
+use 5.010001;
+use strict;
+use warnings;
+
+use Getopt::Long qw(:config no_ignore_case bundling no_ignore_case gnu_compat no_getopt_compat);
+use IO::Tail;
+#use Timer::HiRes;
+
+my $PROG = "spanel-tail-weblog";
+
+my %Opts = (
+    http => 1,
+    https => 1,
+
+    site => undef,
+);
+
+sub parse_options {
+    Getopt::Long::GetOptions(
+        'help|h|?' => sub {
+            print "Usage: $PROG [options]\n";
+            print <<EOT;
+Usage: $PROG [options] <site>
+Options:
+  --no-http     Don't tail HTTP log.
+  --no-https    Don't tail HTTPS log.
+For more details, see the documentation (man $PROG).
+EOT
+            exit 0;
+        },
+        'version|v' => sub {
+            no warnings 'once';
+            print "$PROG version ", ($main::VERSION // "dev"), "\n";
+            exit 0;
+        },
+        'http!' => \$Opts{http},
+        'https!' => \$Opts{https},
+    );
+
+    die "$PROG: Please specify site\n" unless @ARGV;
+    die "$PROG: Extraneous arguments\n" unless @ARGV == 1;
+    $Opts{site} = $ARGV[0];
+    $Opts{site} =~ /\A[\w-]+(\.[\w-]+)*\z/ or die "$PROG: Invalid site `$Opts{site}`\n";
+    my $dir = "/s/$Opts{site}/syslog";
+    (-d $dir) or die "$PROG: Site not found `$Opts{site}`: no $dir\n";
+    chdir $dir or die "$PROG: Can't chdir to $dir\n";
+}
+
+sub run {
+    my $tail = IO::Tail->new;
+
+    my $last_check_time;
+    my ($http_log_name, $https_log_name);
+
+    my @buffer;
+    while (1) {
+        my $now = time();
+        if (!$last_check_time || $last_check_time < $now - 5) {
+
+            my @names;
+
+            {
+                last unless $Opts{http};
+                @names = sort(glob "http_access.*.log");
+                last unless @names;
+                if (!$http_log_name || $http_log_name ne $names[-1]) {
+                    # newest log has changed
+                    $tail->remove_file($http_log_name) if $http_log_name;
+                    $http_log_name = $names[-1];
+                    $tail->add(
+                        $http_log_name, sub {
+                            push @buffer, split /^/m, ${$_[0]};
+                        });
+                }
+            }
+
+            {
+                last unless $Opts{https};
+                @names = sort(glob "https_access.*.log");
+                last unless @names;
+                if (!$https_log_name || $https_log_name ne $names[-1]) {
+                    # newest log has changed
+                    $tail->remove_file($https_log_name) if $https_log_name;
+                    $https_log_name = $names[-1];
+                    $tail->add(
+                        $https_log_name, sub {
+                            push @buffer, split /^/m, ${$_[0]};
+                        });
+                }
+            }
+
+            $last_check_time = $now;
+        }
+
+        $tail->check;
+        for (@buffer) {
+            print;
+        }
+        sleep 1;
+    }
+}
+
+# MAIN
+
+$|++;
+parse_options();
+run();
+
+# PODNAME:
+# ABSTRACT: Tail -f spanel HTTP and/or HTTPS access log
+
+=head1 SYNOPSIS
+
+ % spanel-tail-weblog example.com
