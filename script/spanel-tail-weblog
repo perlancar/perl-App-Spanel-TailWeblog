@@ -7,21 +7,31 @@ use 5.010001;
 use strict;
 use warnings;
 
-use Getopt::Long qw(:config no_ignore_case bundling no_ignore_case gnu_compat no_getopt_compat);
-use IO::Tail;
+use Getopt::Long::Complete qw(GetOptionsWithCompletion);
 use Time::HiRes 'sleep';
 
 my $PROG = "spanel-tail-weblog";
 
+my $Site;
 my %Opts = (
     http => 1,
     https => 1,
-
-    site => undef,
 );
 
 sub parse_options {
-    Getopt::Long::GetOptions(
+    GetOptionsWithCompletion(
+        sub {
+            my %args = @_;
+            my $word = $args{word};
+            my $type = $args{type};
+            if ($type eq 'site') {
+                require Complete::Spanel;
+                return Complete::Spanel::complete_spanel_site(
+                    word => $word,
+                );
+            }
+            [];
+        },
         'help|h|?' => sub {
             print "Usage: $PROG [options]\n";
             print <<EOT;
@@ -40,69 +50,43 @@ EOT
         },
         'http!' => \$Opts{http},
         'https!' => \$Opts{https},
+        '<>' => sub {
+            die "$PROG: Extraneous argument '$_[0]'\n" if defined $Site;
+            $_[0] =~ /\A[\w-]+(\.[\w-]+)*\z/
+                or die "$PROG: Invalid site '$_[0]'\n";
+            $Site = $_[0];
+        },
     );
 
-    die "$PROG: Please specify site\n" unless @ARGV;
-    die "$PROG: Extraneous arguments\n" unless @ARGV == 1;
-    $Opts{site} = $ARGV[0];
-    $Opts{site} =~ /\A[\w-]+(\.[\w-]+)*\z/ or die "$PROG: Invalid site `$Opts{site}`\n";
-    my $dir = "/s/$Opts{site}/syslog";
-    (-d $dir) or die "$PROG: Site not found `$Opts{site}`: no $dir\n";
-    chdir $dir or die "$PROG: Can't chdir to $dir\n";
+    die "$PROG: Please specify site\n" unless $Site;
+    my $dir = "/s/$Site/syslog";
+    (-d $dir) or die "$PROG: Site not found: '$Site': no $dir\n";
+    chdir $dir or die "$PROG: Can't chdir to '$dir'\n";
 }
 
 sub run {
-    my $tail = IO::Tail->new;
+    require Logfile::Tail::Switch;
 
-    my $last_check_time;
-    my ($http_log_name, $https_log_name);
+    no warnings 'once';
+    local $Logfile::Tail::Switch::WARN_NO_MATCH = 0;
 
-    my @buffer;
+    my @globs;
+    if ($Opts{http})  { push @globs, "http_access.*.log"  }
+    if ($Opts{https}) { push @globs, "https_access.*.log" }
+
+    my $tail = Logfile::Tail::Switch->new(
+        globs => \@globs,
+        #check_freq => $Opts{check_freq},
+        #tail_new   => $Opts{tail_new},
+    );
+
     while (1) {
-        my $now = time();
-        if (!$last_check_time || $last_check_time < $now - 2) {
-
-            my @names;
-
-            {
-                last unless $Opts{http};
-                @names = sort(glob "http_access.*.log");
-                last unless @names;
-                if (!$http_log_name || $http_log_name ne $names[-1]) {
-                    # newest log has changed
-                    $tail->remove_file($http_log_name) if $http_log_name;
-                    $http_log_name = $names[-1];
-                    $tail->add(
-                        $http_log_name, sub {
-                            push @buffer, split /^/m, ${$_[0]};
-                        });
-                }
-            }
-
-            {
-                last unless $Opts{https};
-                @names = sort(glob "https_access.*.log");
-                last unless @names;
-                if (!$https_log_name || $https_log_name ne $names[-1]) {
-                    # newest log has changed
-                    $tail->remove_file($https_log_name) if $https_log_name;
-                    $https_log_name = $names[-1];
-                    $tail->add(
-                        $https_log_name, sub {
-                            push @buffer, split /^/m, ${$_[0]};
-                        });
-                }
-            }
-
-            $last_check_time = $now;
+        my $line = $tail->getline;
+        if (length $line) {
+            print $line;
+        } else {
+            sleep 0.1;
         }
-
-        $tail->check;
-        for (@buffer) {
-            print;
-        }
-        @buffer = ();
-        sleep 0.1;
     }
 }
 
@@ -117,4 +101,6 @@ run();
 
 =head1 SYNOPSIS
 
- % spanel-tail-weblog example.com
+ % spanel-tail-weblog example.com            ; # both http & https
+ % spanel-tail-weblog --no-https example.com ; # http only
+ % spanel-tail-weblog --no-http  example.com ; # https only
