@@ -24,7 +24,7 @@ sub parse_options {
             my %args = @_;
             my $word = $args{word};
             my $type = $args{type};
-            if ($type eq 'site') {
+            if ($type eq 'arg') {
                 require Complete::Spanel;
                 return Complete::Spanel::complete_spanel_site(
                     word => $word,
